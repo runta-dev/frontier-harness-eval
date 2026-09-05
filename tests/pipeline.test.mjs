@@ -92,9 +92,24 @@ test('an unconfirmed completion is infra-invalid and recoverable, not a harness 
   assert.equal(f.executions().length, 1);
 });
 
+test('environment failure before agent setup is excluded and may be retried', t => {
+  const exception = { exception_type: 'RuntimeError', exception_message: 'Proxy image could not be built' };
+  const f = fixture(t, { result: { exception_info: exception,
+    environment_setup: { started_at: '2026-09-05T00:00:00Z' }, agent_setup: null, agent_execution: null } });
+  ok(f.run());
+  assert.equal(f.trial().status, 'infra_invalid');
+  assert.deepEqual(f.trial().harness_exception, exception);
+  f.setConfig({});
+  ok(f.run());
+  assert.equal(f.trial().status, 'success');
+  assert.equal(f.executions().length, 2);
+});
+
 for (const [name, config, status] of [
   ['verifier failure', { result: { resolved: false, reward: 1 } }, 'failure'],
   ['harness crash', { runnerCrash: true }, 'failure'],
+  ['agent execution exception', { result: { exception_info: { exception_type: 'RuntimeError' },
+    environment_setup: {}, agent_setup: {}, agent_execution: { started_at: '2026-09-05T00:00:00Z' } } }, 'failure'],
   ['remote timeout', { runnerTimeout: true }, 'timeout'],
 ]) test(`${name} stays scoreable and is never rerun by transport recovery`, t => {
   const f = fixture(t, config);

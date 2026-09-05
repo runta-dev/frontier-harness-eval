@@ -28,6 +28,7 @@ if (args[0] === 'checkpoint') {
     console.log(JSON.stringify({ checkpoints: [{ display_name: 'golden', state: states[Math.min(index, states.length - 1)] }] }));
   } else if (args[1] === 'restore') {
     if (config.restoreFailure) process.exit(1);
+    fs.rmSync(path.join(root, 'remote'), { recursive: true, force: true });
     prepare();
   }
 } else if (args[0] === 'run') {

@@ -307,7 +307,7 @@ rexec "set -eu
   \"system_runc_workaround\": $SYSTEM_RUNC,
   \"runc_path\": \"\$(readlink -f \$(command -v runc))\",
   \"harbor_version\": \"\$(harbor --version 2>&1 | head -1)\",
-  \"pier_version\": \"\$(pier --version 2>&1 | head -1)\",
+  \"pier_version\": \"\$(pier --version 2>/dev/null | tail -1)\",
   \"python_version\": \"\$(python3 --version 2>&1)\",
   \"created_at\": \"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
 }

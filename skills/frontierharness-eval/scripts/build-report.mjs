@@ -80,6 +80,9 @@ const providerDiffers = Boolean(candidate.provider && baselineProvider
 
 const caveats = [
   !comparable ? `Only ${candidate.completed} of ${candidate.expected} published tasks were scored. This subset is not comparable to the published leaderboard and receives no rank.` : null,
+  manifest?.harness_distribution === "official-release"
+    ? `The evaluated executable was official release ${manifest.harness_release}. The repository commit is a separate rebuild reference; no release-to-source mapping is asserted. Packaged executable SHA-256: ${manifest.harness_binary_sha256}.`
+    : null,
   "This workflow uses one shared checkpoint with images normally pulled after each restore. The published baselines used per-task checkpoints; the environments are not identical.",
   manifest?.deep_swe_commit
     ? `DeepSWE ran at commit \`${manifest.deep_swe_commit}\`. The default 435ee89 corpus uses separate-verifier images that differ from the repository's frozen public task metadata. Reproducing a published score requires a control run; matching the task names alone does not establish equivalence.`
@@ -144,7 +147,8 @@ ${comparison}
 | Model | \`${candidate.model ?? "unspecified"}\` |
 | Provider | ${candidate.provider ? `\`${candidate.provider}\`` : "unspecified"} |
 | Harness repo | ${manifest?.harness_repo ? `\`${manifest.harness_repo}\`` : "see manifest"} |
-| Harness commit | \`${manifest?.harness_commit ?? "unknown"}\` |
+| Harness commit | \`${manifest?.harness_commit ?? "unknown"}\`${manifest?.harness_commit_role ? ` (${manifest.harness_commit_role})` : ""} |
+${manifest?.harness_release ? `| Evaluated release | ${manifest.harness_release} (${manifest.harness_distribution}) |\n` : ""}\
 | Runtime | ${manifest ? `${manifest.cpus} vCPU, ${manifest.memory_mib} MiB` : "see manifest"} |
 | Harbor | \`${manifest?.harbor_version ?? "unknown"}\` |
 | Pier | \`${manifest?.pier_version ?? "unknown"}\` |

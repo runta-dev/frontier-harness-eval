@@ -350,7 +350,15 @@ while IFS= read -r entry || [ -n "$entry" ]; do
   # alive so an interrupted controller can reattach without rerunning the harness.
   record_infra "runner or evidence collection pending; re-run the same command to resume" true
   retry_transport runta exec "$runtime" -- sh -lc \
-    "nohup setsid bash $state_dir/worker.sh $state_dir $TIMEOUT $(shell_quote "$command") </dev/null >>$state_dir/worker.log 2>&1 &" \
+    "if command -v systemd-run >/dev/null; then
+       env_flags=\$(python3 -c 'import os,re; print(\" \".join(\"--setenv=\" + k for k in os.environ if re.fullmatch(\"[A-Za-z_][A-Za-z_0-9]*\", k)))')
+       systemd-run --quiet --collect --unit=fh-$slug \$env_flags \\
+         --property=StandardOutput=append:$state_dir/worker.log \\
+         --property=StandardError=append:$state_dir/worker.log \\
+         /bin/bash $state_dir/worker.sh $state_dir $TIMEOUT $(shell_quote "$command")
+     else
+       nohup setsid bash $state_dir/worker.sh $state_dir $TIMEOUT $(shell_quote "$command") </dev/null >>$state_dir/worker.log 2>&1 &
+     fi" \
     >>"$trial_dir/transport.log" 2>&1 || true
 
   completed=false
@@ -414,9 +422,13 @@ while IFS= read -r entry || [ -n "$entry" ]; do
   cost=$(extract "$trial_dir/jobs" '.total_cost_usd // .total_cost // .cost_usd // .usage.total_cost_usd | select(type == "number")')
   turns=$(extract "$trial_dir/jobs" '.n_steps // .num_turns // .turns // .agent_info.n_steps // .agent_info.num_turns | select(type == "number")')
   cache=$(extract "$trial_dir/jobs" '.cache_hit_rate // .cache_read_ratio | select(type == "number")')
-  exception=$(extract "$trial_dir/jobs" '.exception_info | select(. != null) | tostring')
+  exception=$(extract "$trial_dir/jobs" '.exception_info | select(. != null)')
+  environment_failure=$(extract "$trial_dir/jobs" 'select(.exception_info != null and .environment_setup != null and .agent_setup == null and .agent_execution == null) | true')
   success=$(jq -n --argjson r "${reward:-null}" '($r == true) or ($r == 1)' 2>/dev/null) || success=false
-  if [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 137 ]; then
+  if [ "$environment_failure" = true ]; then
+    status=infra_invalid
+    success=false
+  elif [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 137 ]; then
     status=timeout
     success=false
   elif [ "$success" = true ]; then
@@ -431,12 +443,12 @@ while IFS= read -r entry || [ -n "$entry" ]; do
     --arg runtime "$runtime" --arg checkpoint "$CHECKPOINT" \
     --argjson success "$success" --argjson duration "$duration" --argjson exit_code "$exit_code" \
     --argjson cost "${cost:-null}" --argjson turns "${turns:-null}" --argjson cache "${cache:-null}" \
-    --arg exception "$exception" \
+    --argjson exception "${exception:-null}" \
     '{id:$id, title:$task, suite:$suite, status:$status, success:$success,
       duration_seconds:$duration, cost_first_cold_usd:$cost, turns:$turns,
       cache_hit_rate_normalized:$cache, exit_code:$exit_code,
       runtime:$runtime, checkpoint:$checkpoint,
-      harness_exception:(if $exception == "" then null else $exception end),
+      harness_exception:$exception,
       included_in_efficiency:$success}' > "$trial_dir/trial.json.tmp"
   mv "$trial_dir/trial.json.tmp" "$trial_dir/trial.json"
   runta rm "$runtime" >>"$trial_dir/transport.log" 2>&1 || echo "failed to delete runtime $runtime" >&2

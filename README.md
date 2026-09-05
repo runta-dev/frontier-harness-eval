@@ -82,7 +82,7 @@ The repository intentionally contains **results, task definitions, and the evalu
 
 ## Evaluate your own harness
 
-The workflow that produced the table above ships with this repository, so a harness that is not in it can be scored on the same tasks, runtime, and cost accounting, then placed directly next to the twelve baseline configurations.
+This repository ships a reproduction workflow for evaluating another harness on the published task set. It records environment differences from the original baseline run; a matched control run is needed to establish comparability.
 
 [`skills/frontierharness-eval/`](skills/frontierharness-eval/) is an agent-neutral skill: point any coding agent that reads `SKILL.md` at it and it will drive the whole run — freezing the golden checkpoint, running every task from an identical fresh restore, scoring the trials, and building the report.
 
@@ -90,16 +90,43 @@ The workflow that produced the table above ships with this repository, so a harn
 
 ### Let an agent drive it
 
-Clone this repository and open it in any coding agent:
+Install the evaluation skill and its [Runta companion skills](https://runta.com/docs/skills/)
+with the [Skills CLI](https://github.com/vercel-labs/skills) (Node.js and Git required).
+Run these in the project where you use your coding agent:
 
 ```bash
-git clone https://github.com/frontier-harness-eval/eval.git
+npx skills add https://runta.com/docs --skill runta-installer runta-cli
+npx skills add frontier-harness-eval/eval --skill frontierharness-eval
 ```
 
-Ask the agent to evaluate your harness:
+`runta-installer` handles Runta tooling setup and verification; `runta-cli` provides
+runtime operation guidance. `frontierharness-eval` drives the benchmark, scoring, and
+report. If the Runta skills are already installed, only the second command is needed.
+
+Choose the same agent for both commands when prompted, or select one directly:
+
+```bash
+npx skills add https://runta.com/docs --skill runta-installer runta-cli --agent codex -y
+npx skills add frontier-harness-eval/eval --skill frontierharness-eval --agent codex -y
+```
+
+Add `--global` to both commands to make the skills available across projects. Start a new agent session
+in the project and ask:
 
 ```text
-use the skill located in the repo to evaluate [your harness github link]
+Use the frontierharness-eval skill to evaluate https://github.com/acme/my-harness.
+Start with one Terminal-Bench task and one DeepSWE task.
+```
+
+The skill sets up a benchmark checkout for the task definitions and baseline results,
+uses the Runta skills for tooling setup, then checks prerequisites and guides the
+evaluation. Installing skills alone does not run evaluations. For a prompt with explicit harness, commit, provider, and build
+settings, see [`PROMPT.md`](skills/frontierharness-eval/PROMPT.md).
+
+Already cloned this repository? Install the local copy from its root:
+
+```bash
+npx skills add . --skill frontierharness-eval
 ```
 
 <details>
@@ -113,7 +140,7 @@ FH=skills/frontierharness-eval/scripts
 
 **1. Prerequisites.** The `runta` CLI (`brew install runta-dev/tap/runta` or `npm i -g @runta/runta-cli`) authenticated with `runta login`, plus `jq` and node >= 18.
 
-**2. Install script.** Write a script that builds your harness on a clean Linux box. If it is not a built-in agent for Harbor or Pier, register it as a custom agent in both runner registries there, and use the registered name as `--harness`.
+**2. Install script.** Write a script that builds your harness on a clean Linux box. If it is not a built-in agent for Harbor or Pier, register it as a custom agent in both runner registries there, and use the registered name as `--harness`. For a service on the runtime host or an external host, set `--harness-topology runtime-service` or `external-service` when provisioning and document its resource limits and state reset.
 
 **3. Provider key.** Store it once as a [Runta secret](https://runta.com/docs/runtime/secrets-and-secret-injection/), named after the env var for your provider (`FIREWORKS_API_KEY`, `MOONSHOT_API_KEY`, `OPENROUTER_API_KEY`, or `TOGETHER_API_KEY`). The interactive prompt keeps the value out of your shell history:
 
@@ -123,15 +150,15 @@ runta secret set FIREWORKS_API_KEY --prompt
 
 The API never hands the value back, so provisioning reuses the stored secret instead of asking for plaintext again. A `--value-env` or `--value-stdin` route works too if you already have the key in the environment.
 
-**4. Golden checkpoint.** One command creates the clean runtime, clones the harness at a pinned commit, installs the Harbor and Pier stacks, pre-pulls the task images, and freezes the checkpoint:
+**4. Golden checkpoint.** One command creates the clean runtime, clones the harness at a pinned commit, installs the Harbor and Pier stacks, and freezes a small checkpoint. The trial runner pulls each task image after its restore:
 
 ```bash
 $FH/provision-golden-checkpoint.sh \
   --runtime fh-build --checkpoint fh-golden-myharness-v1 \
   --harness my-harness --provider fireworks \
   --repo https://github.com/acme/my-harness --commit 9f2c1ab \
-  --cpus 4 --memory 8192 --disk-size-gib 100 \
-  --prepull-tasks tasks --install-script ./install-my-harness.sh
+  --cpus 4 --memory 8192 --disk-size-gib 100 --keep-runtime \
+  --install-script ./install-my-harness.sh
 ```
 
 The real key stays in the egress proxy, so confirm the runtime only ever sees a stub:
@@ -140,7 +167,10 @@ The real key stays in the egress proxy, so confirm the runtime only ever sees a 
 runta exec fh-build -- sh -lc 'test "$FIREWORKS_API_KEY" = runta-secret-stub'
 ```
 
-**5. Trials.** Each task gets its own fresh restore, which is then deleted. With no `--tasks`, this runs the published 30-task set read from `tasks/`:
+The example keeps the build runtime for inspection. After confirming the checkpoint
+is ready, remove that build runtime with `runta rm fh-build`.
+
+**5. Trials.** Each task gets its own fresh restore, which is deleted after the full evidence archive is verified locally. With no `--tasks`, this runs the published 30-task set read from `tasks/`:
 
 ```bash
 $FH/run-trials.sh \
@@ -148,7 +178,7 @@ $FH/run-trials.sh \
   --provider fireworks --run-id 2026-09-02-myharness --out runs
 ```
 
-Pass a file of suite-prefixed ids to `--tasks` to run a subset — worth doing first with one Terminal-Bench and one DeepSWE task to prove the plumbing before spending the full budget. Re-running the same `--run-id` replaces only the tasks you list. If a trial dies on infrastructure twice, mark it rather than scoring it as a failure:
+Pass a file of suite-prefixed ids to `--tasks` to run a subset — worth doing first with one Terminal-Bench and one DeepSWE task to prove the plumbing before spending the full budget. Re-running the same `--run-id` resumes pending evidence collection, retries infrastructure setup failures, and preserves every valid attempt. Disconnected execution and incomplete copies retain the runtime for recovery. Use a new run id for an intentional new experiment. If a trial dies on infrastructure twice, mark it rather than scoring it as a failure:
 
 ```bash
 trial=runs/2026-09-02-myharness/trials/terminal-bench-<task>/trial.json

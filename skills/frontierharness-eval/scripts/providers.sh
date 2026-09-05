@@ -66,16 +66,12 @@ warn_unless_kimi_k3() {
   echo "warning: --model $1 is not Kimi K3. Every published FrontierHarness result uses Kimi K3, so this score will not be comparable to them." >&2
 }
 
-# Restrict runtime egress to the model host. astral.sh is required because some
-# Terminal-Bench verifiers curl uv; blocking it scores a download failure as a
-# task failure. github.com is intentionally not allowed.
+# Exact hosts are required at every redirect in the verifier's uv download chain.
+# Never fall back to provider-only egress: that turns setup failures into reward 0.
 apply_provider_egress() {
   local runtime=$1 host=$2
   [ -n "$runtime" ] && [ -n "$host" ] || return 0
-  if runta egress set "$runtime" --mode allowlist --allow "$host" --allow astral.sh; then
-    return 0
-  fi
-  echo "warning: could not add astral.sh to the egress allowlist on $runtime; trying provider host only" >&2
   runta egress set "$runtime" --mode allowlist --allow "$host" \
-    || { echo "warning: could not set egress allowlist on $runtime" >&2; return 1; }
+    --allow astral.sh --allow releases.astral.sh --allow github.com \
+    --allow release-assets.githubusercontent.com
 }

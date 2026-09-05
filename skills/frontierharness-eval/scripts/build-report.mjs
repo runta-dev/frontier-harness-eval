@@ -24,6 +24,7 @@ const run = await readJson(join(runDir, "run.json"), `run.json not found in ${ru
 const benchmark = await readJsonOrNull(args.benchmark ?? "benchmark.json");
 const baselineModel = benchmark?.model ?? baseline.model;
 const baselineProvider = benchmark?.model_provider ?? null;
+const comparable = candidate.comparable === true;
 const manifest = await readJsonOrNull(join(runDir, "trials", firstTrialDir(candidate), "manifest.json"));
 
 const reportDir = join(runDir, "report");
@@ -51,6 +52,8 @@ const rows = [
 ].sort((a, b) => b.passRate - a.passRate || a.label.localeCompare(b.label));
 
 const rank = rows.findIndex(row => row.isCandidate) + 1;
+if (!comparable) rows.sort((a, b) => Number(a.isCandidate) - Number(b.isCandidate) || b.passRate - a.passRate || a.label.localeCompare(b.label));
+const rankingClause = comparable ? `ranking **${rank} of ${rows.length}** on pass rate against the published configurations` : `**subset evaluation; not ranked against the ${candidate.expected}-task leaderboard**`;
 const percent = value => typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "n/a";
 const money = value => typeof value === "number" ? `$${value.toFixed(2)}` : "n/a";
 const duration = value => {
@@ -62,7 +65,7 @@ const duration = value => {
 
 const comparison = rows.map((row, index) => {
   const name = row.isCandidate ? `**${row.label}**` : row.label;
-  return `| ${String(index + 1).padStart(2, "0")} | ${name} | ${percent(row.passRate)} | ${money(row.cost)} | ${percent(row.cache)} | ${duration(row.duration)} |`;
+  return `| ${row.isCandidate && !comparable ? '—' : String(index + 1).padStart(2, "0")} | ${name} | ${percent(row.passRate)} | ${money(row.cost)} | ${percent(row.cache)} | ${duration(row.duration)} |`;
 }).join("\n");
 
 const taskRows = candidate.task_details.map(task => {
@@ -76,6 +79,20 @@ const providerDiffers = Boolean(candidate.provider && baselineProvider
   && modelKey(candidate.provider) !== modelKey(baselineProvider));
 
 const caveats = [
+  !comparable ? `Only ${candidate.completed} of ${candidate.expected} published tasks were scored. This subset is not comparable to the published leaderboard and receives no rank.` : null,
+  manifest?.harness_distribution === "official-release"
+    ? `The evaluated executable was official release ${manifest.harness_release}. The repository commit is a separate rebuild reference; no release-to-source mapping is asserted. Packaged executable SHA-256: ${manifest.harness_binary_sha256}.`
+    : null,
+  "This workflow uses one shared checkpoint with images normally pulled after each restore. The published baselines used per-task checkpoints; the environments are not identical.",
+  manifest?.deep_swe_commit
+    ? `DeepSWE ran at commit \`${manifest.deep_swe_commit}\`. The default 435ee89 corpus uses separate-verifier images that differ from the repository's frozen public task metadata. Reproducing a published score requires a control run; matching the task names alone does not establish equivalence.`
+    : null,
+  manifest?.harness_topology && manifest.harness_topology !== "container-cli"
+    ? `The harness topology was \`${manifest.harness_topology}\`; the published baselines used CLIs inside task containers. Custom registration is supported, but does not by itself establish equivalent isolation, resources, or state reset.`
+    : null,
+  manifest?.system_runc_workaround
+    ? "Provisioning enabled the system-runc workaround for Runta's injected-init hang; the resolved runc path is recorded in the manifest."
+    : null,
   candidate.cost_coverage < 1
     ? `Cost was captured for ${(candidate.cost_coverage * 100).toFixed(0)}% of tasks, so cost figures are partial.`
     : null,
@@ -95,13 +112,13 @@ const caveats = [
 ].filter(Boolean).map(item => `- ${item}`).join("\n");
 
 const hasCost = typeof candidate.effective_cost_per_pass === "number";
-const costClause = hasCost ? ` at **${money(candidate.effective_cost_per_pass)} per task**` : "";
+const costClause = hasCost ? ` at **${money(candidate.effective_cost_per_pass)} per pass**` : "";
 
 const markdown = `# ${candidate.label} on FrontierHarness Eval
 
-**${percent(candidate.pass_rate)} pass rate** (${candidate.successful}/${candidate.completed} tasks)${costClause}, ranking **${rank} of ${rows.length}** on pass rate against the published FrontierHarness v1.0 configurations.
+**${percent(candidate.pass_rate)} pass rate** (${candidate.successful}/${candidate.completed} tasks)${costClause}; ${rankingClause}.
 
-![Pass rate versus cost per task, ${candidate.label} against the FrontierHarness Eval baselines](chart.svg)
+![Pass rate versus effective cost per pass, ${candidate.label} against the FrontierHarness Eval baselines](chart.svg)
 
 ## Result
 
@@ -109,7 +126,7 @@ const markdown = `# ${candidate.label} on FrontierHarness Eval
 | --- | --- |
 | Pass rate | ${percent(candidate.pass_rate)} |
 | Tasks passed | ${candidate.successful} / ${candidate.completed} |
-| Cost per task | ${money(candidate.effective_cost_per_pass)} |
+| Effective cost per pass | ${money(candidate.effective_cost_per_pass)} |
 | Median cost per successful task | ${money(candidate.median_cost_per_success)} |
 | Median time per successful task | ${duration(candidate.median_duration_seconds)} |
 | Median cache hit rate | ${percent(candidate.cache_hit_rate_typical)} |
@@ -117,7 +134,7 @@ const markdown = `# ${candidate.label} on FrontierHarness Eval
 
 ## Comparison
 
-| # | Harness | Pass rate | Cost per task | Cache, median | Median time |
+| # | Harness | Pass rate | Effective cost per pass | Cache, median | Median time |
 | --- | --- | --- | --- | --- | --- |
 ${comparison}
 
@@ -130,14 +147,15 @@ ${comparison}
 | Model | \`${candidate.model ?? "unspecified"}\` |
 | Provider | ${candidate.provider ? `\`${candidate.provider}\`` : "unspecified"} |
 | Harness repo | ${manifest?.harness_repo ? `\`${manifest.harness_repo}\`` : "see manifest"} |
-| Harness commit | \`${manifest?.harness_commit ?? "unknown"}\` |
+| Harness commit | \`${manifest?.harness_commit ?? "unknown"}\`${manifest?.harness_commit_role ? ` (${manifest.harness_commit_role})` : ""} |
+${manifest?.harness_release ? `| Evaluated release | ${manifest.harness_release} (${manifest.harness_distribution}) |\n` : ""}\
 | Runtime | ${manifest ? `${manifest.cpus} vCPU, ${manifest.memory_mib} MiB` : "see manifest"} |
 | Harbor | \`${manifest?.harbor_version ?? "unknown"}\` |
 | Pier | \`${manifest?.pier_version ?? "unknown"}\` |
 | DeepSWE corpus | \`${manifest?.deep_swe_commit ?? "unknown"}\` |
 | Started | ${run.started_at ?? "unknown"} |
 
-Every trial is a fresh restore of the same golden checkpoint, so all runs share an identical cold start with the same vCPU, memory, disk contents, and memory state. No formal task was executed before the checkpoint was frozen.
+Every trial restores the same base checkpoint with the same configured vCPU, memory, and disk capacity. Task images are normally pulled after restore. No formal task was executed before the checkpoint was frozen.
 
 ## Task results
 
@@ -183,15 +201,17 @@ const html = `<!doctype html>
 <main>
   <h1>${escapeHtml(candidate.label)} on FrontierHarness Eval</h1>
   <p class="lede"><strong>${percent(candidate.pass_rate)}</strong> pass rate (${candidate.successful}/${candidate.completed} tasks)${hasCost ? `
-     at <strong>${money(candidate.effective_cost_per_pass)}</strong> per task` : ""}, ranking ${rank} of ${rows.length}
-     on pass rate against the published FrontierHarness v1.0 configurations. Model <code>${escapeHtml(candidate.model ?? "unspecified")}</code>,
+     at <strong>${money(candidate.effective_cost_per_pass)}</strong> per pass` : ""}; ${comparable ? `ranking ${rank} of ${rows.length}` : `subset evaluation; not ranked against the ${candidate.expected}-task leaderboard`}.
+     Model <code>${escapeHtml(candidate.model ?? "unspecified")}</code>,
      golden checkpoint <code>${escapeHtml(run.checkpoint)}</code>.</p>
   ${chart.replace(/^<\?xml[^>]*\?>\s*/, "")}
   <h2>Comparison</h2>
   <table>
-    <tr><th>#</th><th>Harness</th><th>Pass rate</th><th>Cost per task</th><th>Cache, median</th><th>Median time</th></tr>
-    ${rows.map((row, index) => `<tr${row.isCandidate ? ' class="candidate"' : ""}><td>${index + 1}</td><td>${escapeHtml(row.label)}</td><td>${percent(row.passRate)}</td><td>${money(row.cost)}</td><td>${percent(row.cache)}</td><td>${duration(row.duration)}</td></tr>`).join("\n    ")}
+    <tr><th>#</th><th>Harness</th><th>Pass rate</th><th>Effective cost per pass</th><th>Cache, median</th><th>Median time</th></tr>
+    ${rows.map((row, index) => `<tr${row.isCandidate ? ' class="candidate"' : ""}><td>${row.isCandidate && !comparable ? '—' : index + 1}</td><td>${escapeHtml(row.label)}</td><td>${percent(row.passRate)}</td><td>${money(row.cost)}</td><td>${percent(row.cache)}</td><td>${duration(row.duration)}</td></tr>`).join("\n    ")}
   </table>
+  <h2>Reproducibility caveats</h2>
+  <ul>${caveats.split('\n').map(line => `<li>${escapeHtml(line.replace(/^- /, ''))}</li>`).join('')}</ul>
   <h2>Task results</h2>
   <table>
     <tr><th>Task</th><th>Result</th><th>Cost</th><th>Time</th><th>Turns</th></tr>
@@ -204,7 +224,7 @@ const html = `<!doctype html>
 
 await writeFile(join(reportDir, "index.html"), html);
 
-console.log(`${candidate.label}: ${percent(candidate.pass_rate)} pass rate, rank ${rank} of ${rows.length}`);
+console.log(`${candidate.label}: ${percent(candidate.pass_rate)} pass rate, ${comparable ? `rank ${rank} of ${rows.length}` : 'subset not ranked'}`);
 console.log(`wrote ${join(reportDir, "REPORT.md")}`);
 console.log(`wrote ${join(reportDir, "index.html")}`);
 console.log(`share: gh gist create ${join(reportDir, "REPORT.md")} ${join(reportDir, "chart.svg")} --public`);

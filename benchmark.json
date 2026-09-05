@@ -17,6 +17,8 @@
     "deep_swe": {
       "repository": "datacurve-ai/deep-swe",
       "version": "v1.1",
+      "reproduction_ref": "435ee89ec2f2e2289f33b0da4f992f0b7b7266b9",
+      "reproduction_note": "v1.1 is the published dataset label, not an upstream Git tag. The reproduction ref uses separate-verifier images that differ from the frozen public task metadata; validate comparability with a control run.",
       "count": 9
     }
   },

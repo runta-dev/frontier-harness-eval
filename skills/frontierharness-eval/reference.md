@@ -54,11 +54,17 @@ the model id recognisably Kimi K3 or the scripts will warn:
 ```bash
 --provider custom \
   --model openai/kimi-k3 \
-  --secret-name MY_GATEWAY_API_KEY
+  --secret-name MY_GATEWAY_API_KEY \
+  --secret-host gateway.example
 ```
 
 Whichever provider you pick, the provision and trial scripts set egress to its host
-plus `astral.sh` (Terminal-Bench verifiers curl uv). Confirm with:
+plus `astral.sh`, `releases.astral.sh`, `github.com`, and
+`release-assets.githubusercontent.com` (Terminal-Bench verifiers download uv through
+redirects). Each hostname must be allowed explicitly; allowing the parent domain is
+insufficient. Provider-only fallback is disabled. Provisioning installs packages and
+clones sources before restricting egress; each trial pulls its selected image before
+applying the policy. Confirm with:
 
 ```bash
 runta egress describe fh-build
@@ -98,7 +104,7 @@ harbor run -d terminal-bench@2.0 -i {task} -a {harness} -m {model} --jobs-dir {j
 **DeepSWE through Pier** (`datacurve/*`):
 
 ```
-pier run -p /work/deep-swe/tasks/{task} --agent {harness} --model {model} --output-dir {jobs}
+pier run -p /work/deep-swe/tasks/{task} --agent {harness} --model {model} --jobs-dir {jobs}
 ```
 
 Verify the flag names against the installed versions before a full run — Harbor and Pier
@@ -116,7 +122,11 @@ DeepSWE tasks go through Pier rather than Harbor.
 
 If a harness is not a built-in agent for either runner, register it as a custom agent in
 the runner's agent registry inside `--install-script`, then pass its registered name as
-`--harness`.
+`--harness`. This includes services: use `--harness-topology runtime-service` for a
+service inside the Runta host, or `external-service` for a service on another host.
+Record its version, resource budget, network access, and per-task state reset. Custom
+registration is supported, but is not proof of equivalence to the container CLI
+baselines.
 
 ## Running Harbor with Runta as the environment provider
 
@@ -158,8 +168,9 @@ memory_mb = 8192
 ```
 
 Match `cpus`, `memory_mb`, and `timeout_sec` when running a task, otherwise results are
-not comparable to the baseline. `provision-golden-checkpoint.sh --prepull-tasks tasks`
-reads `docker_image` from these files to warm the image cache before the checkpoint.
+not comparable to the baseline. The trial script pulls the selected image after each
+restore. Terminal-Bench uses these files; DeepSWE uses the pinned corpus metadata.
+`--prepull-tasks tasks` is optional and can produce an oversized checkpoint.
 
 ## Trial record contract
 
@@ -184,15 +195,21 @@ these fields, so any custom runner can produce them directly:
 ```
 
 `status` is one of `success`, `failure`, `timeout`, or `infra_invalid`. Only
-`infra_invalid` is excluded from scoring. Auto-marked infra is restore failure,
-runtime never becoming ready, or credential-rule failure. A harness crash is a
-`failure` and stays in the denominator. Mark a trial `infra_invalid` by hand only
-after a confirmed platform outage.
+`infra_invalid` is excluded from scoring. Setup failures (restore, readiness, image
+pull, egress, credentials) and unconfirmed execution or evidence transfer are marked
+automatically. A confirmed harness crash remains `failure`; a remote timeout remains
+`timeout`. Neither is retried by transport recovery. A pending record carries
+`recovery: true`, `runtime`, and the exact `runner_command`: re-running the same run
+reattaches to that runtime. A valid attempt is never replaced. Earlier setup failures
+are archived under `runs/<run-id>/attempts/` before retrying. Use a new run id for a
+new experiment. Retained runtimes continue to consume resources until recovered or
+explicitly removed.
 
 Reward extraction reads **top-level** `resolved`, `is_resolved`, `reward`, or
-`passed` from result-named JSON files first (`result.json`, `results.json`,
+`passed`, followed by the pinned runners' explicit `verifier_result.rewards.reward`
+field, from result-named JSON files first (`result.json`, `results.json`,
 `eval.json`, `verifier.json`), then other JSON files in sorted path order. It
-does not walk nested objects, so a passing unit test cannot mark the trial as
+does not recursively walk nested objects, so a passing unit test cannot mark the trial as
 success. If a runner reports success differently, the extracted value will be
 wrong — spot-check the first trial:
 
@@ -231,3 +248,64 @@ runta exec fh-debug -- sh -lc 'cd /work && <runner command with one task>'
 **Costs are null in the report** — the runner did not emit usage in its job output.
 Either enable usage reporting in the harness or record cost from the provider dashboard
 and patch `cost_first_cold_usd` into each `trial.json` before normalizing.
+
+
+## Corpus pin and Pi control
+
+The published dataset label `v1.1` in `benchmark.json` is not an upstream Git tag.
+The reproduction workflow pins
+[`435ee89ec2f2e2289f33b0da4f992f0b7b7266b9`](https://github.com/datacurve-ai/deep-swe/commit/435ee89ec2f2e2289f33b0da4f992f0b7b7266b9).
+Do not silently substitute a tag or the latest branch. The resolved SHA is recorded
+in each manifest; `--deep-swe-ref` allows an explicitly documented override.
+
+This commit has the selected task names, but is not byte-identical to the frozen
+public metadata: for example, HTTPX uses schema 1.3, a separate verifier, and a
+`-v1.1` image tag where this repository records schema 1.1 and an unsuffixed image.
+The report discloses this difference. The publication dates alone do not establish
+which commands, upstream refs, or platform behavior produced the original baselines.
+
+To assess reproduction, use a separate Pi control run with the same patched scripts,
+provider, task set, CPU, memory, disk, image policy, and runc setting as the candidate.
+`metadata/harness-versions.json` pins Pi to `0.84.2`, identified as `pi-responses`.
+Install and register the matching Responses adapter in both runners before using that
+name; the public version record alone does not supply the adapter implementation or
+all of its configuration. Record that provenance in the install script and report.
+
+After provisioning a Pi checkpoint with those settings, run:
+
+```bash
+bash "$FH/run-trials.sh" --checkpoint fh-golden-pi-control --harness pi-responses \
+  --provider fireworks --run-id pi-control --tasks tasks --out runs
+node "$FH/normalize-results.mjs" --run runs/pi-control --label "Pi control"
+```
+
+Use one task from each suite first to verify setup, then resume the same run id for
+all 30 so valid smoke attempts stay canonical. Compare all 30 task-level outcomes
+with the published Pi result (18/30), including missing or infra-invalid tasks and
+cost coverage. A matching total alone does not prove every environment difference is
+immaterial. This repair does not claim that the control has been run.
+
+**Checkpoint stays `creating`** — large snapshots have been reported to stall around
+10 GiB; this is an observed failure range, not a guaranteed platform limit. The full
+image set can reach roughly 22 GiB. Leave `--prepull-tasks` unset and pull per task.
+The script waits up to `--checkpoint-timeout 900` for `ready`, fails clearly on error
+or timeout, and leaves the build runtime for inspection. Verify the eventual state
+before deleting it or requesting another checkpoint.
+
+**Pier verifier image build hangs for 1,800 seconds** — Runta's injected init has been
+reported to prevent container exit. Provisioning restores only the known
+`/usr/local/sbin/runc -> /opt/runta/runta-runc` symlink to `/usr/bin/runc` before any
+sample or verifier runs. It records the resolved binary path. The existing Harbor CA
+overlay still supplies trust to task containers. `--keep-runta-runc` disables this
+workaround for platform validation; use the same choice for candidate and control.
+
+**`runta exec` disconnects or `runta cp` fails** — the worker runs under `nohup`,
+`setsid`, and a lock, with a remote timeout and atomic completion record. Repeating
+launch after a lost acknowledgement cannot execute the harness again. The controller
+polls in short sessions, then copies a checksum-verified archive of jobs, runner log,
+completion record, and manifest. A nonzero copy exit with a matching checksum is
+accepted; a partial copy is retried up to three times. If recovery is still needed,
+the runtime is retained and the attempt is excluded until its evidence is collected.
+Re-run the same command; do not delete that runtime or start another harness attempt.
+
+Local regression checks (no cloud or model spend): `npm test`.

@@ -3,6 +3,9 @@
   "version": "0.0.1",
   "description": "Benchmark your own coding-agent harness against FrontierHarness Eval: sets up the benchmark workspace and installs the agent skill that drives the run.",
   "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
   "bin": {
     "frontierharness-eval": "cli/index.mjs"
   },

@@ -16,6 +16,7 @@ const labels = {
 
 const baseline = await readJson(baselinePath, `baseline not found at ${baselinePath}; pass --baseline <path to eval-data.json>`);
 const candidate = await readJson(join(runDir, "candidate.json"), `candidate.json not found in ${runDir}; run normalize-results.mjs first`);
+const comparable = candidate.comparable === true;
 
 const points = [
   ...baseline.harnesses.map(item => ({
@@ -32,7 +33,8 @@ const points = [
   },
 ];
 
-const plotted = points.filter(point => typeof point.cost === "number" && point.cost > 0);
+const eligible = points.filter(point => !point.isCandidate || comparable);
+const plotted = eligible.filter(point => typeof point.cost === "number" && point.cost > 0);
 const costMissing = points.length - plotted.length;
 
 const width = 1200;
@@ -58,7 +60,7 @@ const domain = [
   [...ladder].reverse().find(value => value <= minCost) ?? minCost,
   ladder.find(value => value >= maxCost) ?? maxCost,
 ];
-const rates = points.map(point => point.passRate);
+const rates = eligible.map(point => point.passRate);
 const rateMin = Math.max(0, Math.floor((Math.min(...rates) - 0.05) * 20) / 20);
 const rateMax = Math.min(1, Math.ceil((Math.max(...rates) + 0.05) * 20) / 20);
 
@@ -136,7 +138,7 @@ const dots = placements
       + `<text class="${point.isCandidate ? "dot-label-candidate" : "dot-label"}" x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="${anchor}">${esc(text)}</text>`;
   }).join("");
 
-const ranked = [...points].sort((a, b) => b.passRate - a.passRate || a.label.localeCompare(b.label));
+const ranked = [...eligible].sort((a, b) => b.passRate - a.passRate || a.label.localeCompare(b.label));
 const barLeft = pad + 20 + 20 + 140;
 const barWidth = width - pad * 2 - 40 - 20 - 140 - 80;
 const list = ranked.map((point, index) => {
@@ -150,11 +152,13 @@ const list = ranked.map((point, index) => {
     + `<text class="value" x="${width - pad - 20}" y="${baselineY}" text-anchor="end">${percent(point.passRate)}</text>`;
 }).join("");
 
-const note = costMissing
-  ? `<text class="note" x="${plot.left}" y="${plot.bottom + 34}">${costMissing} harness omitted from the scatter: cost unavailable</text>`
+const note = !comparable
+  ? `<text class="note" x="${plot.left}" y="${plot.bottom + 22}">Candidate excluded from comparison: ${candidate.successful}/${candidate.completed} passed; ${candidate.completed}/${candidate.expected} tasks scored. Subset is not ranked.</text>`
+  : costMissing
+  ? `<text class="note" x="${plot.left}" y="${plot.bottom + 22}">${costMissing} harness omitted from the scatter: cost unavailable</text>`
   : "";
 
-const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(candidate.label)} compared with the FrontierHarness Eval baselines by pass rate and cost per task" shape-rendering="geometricPrecision" text-rendering="geometricPrecision">
+const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(candidate.label)} compared with the FrontierHarness Eval baselines by pass rate and effective cost per pass" shape-rendering="geometricPrecision" text-rendering="geometricPrecision">
   <rect width="${width}" height="${height}" fill="#020202"/>
   <style>
     text{font-family:Arial,Helvetica,sans-serif}
@@ -175,9 +179,9 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${
   </style>
   <rect x="${pad}" y="${pad}" width="${width - pad * 2}" height="${scatterHeight}" rx="12" fill="#0a0a0a" stroke="#242424"/>
   <text class="title" x="${pad + 20}" y="${pad + 28}">${esc(candidate.label)} versus FrontierHarness Eval v1.0</text>
-  <text class="subtitle" x="${pad + 20}" y="${pad + 46}">Pass rate against median cost per task · model ${esc(candidate.model ?? "unspecified")} · ${candidate.completed} tasks</text>
+  <text class="subtitle" x="${pad + 20}" y="${pad + 46}">Pass rate against effective cost per pass · model ${esc(candidate.model ?? "unspecified")} · ${candidate.completed} tasks</text>
   ${grid}
-  <text class="axis" x="${(plot.left + plot.right) / 2}" y="${plot.bottom + 38}" text-anchor="middle">Cost per task (log scale)</text>
+  <text class="axis" x="${(plot.left + plot.right) / 2}" y="${plot.bottom + 38}" text-anchor="middle">Effective cost per pass (log scale)</text>
   <text class="axis" transform="translate(${pad + 22} ${(plot.top + plot.bottom) / 2}) rotate(-90)" text-anchor="middle">Pass rate</text>
   ${dots}
   ${note}
@@ -192,7 +196,7 @@ await mkdir(reportDir, { recursive: true });
 await writeFile(join(reportDir, "chart.svg"), svg);
 
 const rank = ranked.findIndex(point => point.isCandidate) + 1;
-console.log(`${candidate.label} ranks ${rank} of ${ranked.length} on pass rate`);
+console.log(comparable ? `${candidate.label} ranks ${rank} of ${ranked.length} on pass rate` : `${candidate.label}: subset is not ranked`);
 console.log(`wrote ${join(reportDir, "chart.svg")}`);
 
 async function readJson(path, message) {

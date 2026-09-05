@@ -21,6 +21,7 @@ REPO=""
 COMMIT=""
 MODEL=""
 SECRET_NAME=""
+SECRET_HOST=""
 INSTALL_SCRIPT=""
 PREPULL_TASKS=""
 CPUS=4
@@ -54,6 +55,7 @@ Options:
                         does not vary the model. Required with --provider custom.
   --secret-name NAME    Env var holding the provider key, stored as a Runta secret stub.
                         Defaults to the provider preset, required with custom.
+  --secret-host HOST    Provider host for custom-route egress and credential injection.
   --install-script PATH Local script uploaded and run inside /work/harness to build it
   --harness-topology NAME  container-cli (default), runtime-service, or external-service;
                         recorded in the manifest so reports disclose the topology.
@@ -82,6 +84,7 @@ while [ $# -gt 0 ]; do
     --provider) PROVIDER=$2; shift 2 ;;
     --model) MODEL=$2; shift 2 ;;
     --secret-name) SECRET_NAME=$2; shift 2 ;;
+    --secret-host) SECRET_HOST=$2; shift 2 ;;
     --install-script) INSTALL_SCRIPT=$2; shift 2 ;;
     --harness-topology) HARNESS_TOPOLOGY=$2; shift 2 ;;
     --prepull-tasks) PREPULL_TASKS=$2; shift 2 ;;
@@ -135,6 +138,7 @@ fi
 # Explicit flags win over the provider preset.
 MODEL=${MODEL:-$PROVIDER_MODEL}
 SECRET_NAME=${SECRET_NAME:-$PROVIDER_SECRET}
+PROVIDER_HOST=${SECRET_HOST:-$PROVIDER_HOST}
 
 if [ -z "$MODEL" ] || [ -z "$SECRET_NAME" ]; then
   echo "--provider custom needs both --model and --secret-name" >&2
@@ -169,6 +173,10 @@ if [ "$STORE_SECRET" -eq 1 ]; then
   runta secret set "$SECRET_NAME" --value-env "$SECRET_NAME"
 else
   step "2/9 reusing the $SECRET_NAME secret already on the tenant ($PROVIDER)"
+fi
+if [ -n "$PROVIDER_HOST" ]; then
+  retry_transport runta secret rule set "$RUNTIME" --secret "$SECRET_NAME" --host "$PROVIDER_HOST" \
+    --header Authorization --template 'Bearer ${secret}'
 fi
 # The real value stays in the egress proxy; the runtime only ever sees the stub.
 rexec "test \"\$$SECRET_NAME\" = runta-secret-stub" \

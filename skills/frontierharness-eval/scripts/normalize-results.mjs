@@ -36,6 +36,8 @@ const passes = scored.filter(trial => trial.success);
 const costs = numbers(scored.map(trial => trial.cost_first_cold_usd));
 const totalCost = costs.reduce((sum, value) => sum + value, 0);
 const costCoverage = scored.length ? costs.length / scored.length : 0;
+const benchmark = JSON.parse(await readFile(args.benchmark ?? 'benchmark.json', 'utf8'));
+const expected = benchmark.task_count;
 
 const candidate = {
   name: args.name ?? run.harness,
@@ -45,11 +47,12 @@ const candidate = {
   checkpoint: run.checkpoint,
   run_id: run.run_id,
   candidate: true,
-  expected: scored.length,
+  expected,
+  comparable: scored.length === expected,
   completed: scored.length,
   successful: passes.length,
   infra_invalid: invalid.length,
-  pass_rate: scored.length ? passes.length / scored.length : 0,
+  pass_rate: scored.length ? passes.length / scored.length : null,
 
   // Reproducible from raw per-task cost, so directly comparable to the baseline field.
   effective_cost_per_pass: passes.length && costCoverage === 1 ? totalCost / passes.length : null,

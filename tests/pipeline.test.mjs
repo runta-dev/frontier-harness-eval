@@ -151,8 +151,13 @@ test('a standalone skill runs a subset using workspace task images and builds a 
   }
   const candidate = JSON.parse(readFileSync(join(f.root, 'runs/installed/candidate.json')));
   assert.equal(candidate.successful, 1);
+  assert.equal(candidate.expected, 30);
+  assert.equal(candidate.comparable, false);
   for (const file of ['chart.svg', 'REPORT.md', 'index.html']) {
-    assert.ok(readFileSync(join(f.root, 'runs/installed/report', file), 'utf8').length > 0);
+    const report = readFileSync(join(f.root, 'runs/installed/report', file), 'utf8');
+    assert.ok(report.length > 0);
+    assert.match(report, /not ranked/);
+    assert.doesNotMatch(report, /ranking (?:\*\*)?\d+ of/);
   }
 });
 
@@ -174,6 +179,18 @@ test('provisioning waits for ready before cleanup and skips formal pre-pulls by 
   const install = f.calls().find(a => a[0] === 'exec' && a.at(-1).includes('git checkout') && a.at(-1).includes('deep-swe'));
   assert.ok(install.at(-1).includes('435ee89ec2f2e2289f33b0da4f992f0b7b7266b9'));
   assert.ok(install.at(-1).includes('--jobs-dir'));
+});
+
+test('custom provider provisioning injects credentials and restricts the selected host', t => {
+  const f = fixture(t, { provision: true });
+  ok(f.execute('provision-golden-checkpoint.sh', ['--runtime', 'build', '--checkpoint', 'golden',
+    '--harness', 'grok-build', '--repo', 'https://example.com/grok', '--commit', '1234567',
+    '--provider', 'custom', '--model', 'openai/kimi-k3', '--secret-name', 'FIREWORKS_API_KEY',
+    '--secret-host', 'gateway.example.com']));
+  const rule = f.calls().find(a => a[0] === 'secret' && a[1] === 'rule');
+  assert.ok(rule.includes('gateway.example.com'));
+  assert.ok(rule.includes('Bearer ${secret}'));
+  assert.ok(f.calls().find(a => a[0] === 'egress').includes('gateway.example.com'));
 });
 
 for (const state of ['creating', 'error']) test(`checkpoint stuck in ${state} retains build runtime`, t => {

@@ -54,7 +54,8 @@ the model id recognisably Kimi K3 or the scripts will warn:
 ```bash
 --provider custom \
   --model openai/kimi-k3 \
-  --secret-name MY_GATEWAY_API_KEY
+  --secret-name MY_GATEWAY_API_KEY \
+  --secret-host gateway.example
 ```
 
 Whichever provider you pick, the provision and trial scripts set egress to its host
